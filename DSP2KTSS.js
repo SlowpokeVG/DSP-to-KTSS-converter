@@ -11,27 +11,23 @@ function getSampleForNibble(nibble) {
     return samples + extraNibbles - 2;
 }
 
-function getNibbleAddress(samples) {
-    let frames = Math.floor(samples / samplesPerFrame);
-    let extraSamples = samples % samplesPerFrame;
-    return nibblesPerFrame * frames + extraSamples + 2;
-}
-
 let arguments = process.argv.slice(2);
 if (arguments.length < 2)
-    throw "Usage: DSP2KTSS.exe leftChannel.dsp rightChannel.dsp PTSS\G1L"
+    throw "Usage: DSP2KTSS <leftChannel.dsp> <rightChannel.dsp> g1l | ktss"
 
 const leftChannelName = arguments[0];
 const rightChannelName = arguments[1];
-let format = 'ptss';
+let format = 'ktss';
 if (arguments[2] == 'g1l') format = 'g1l';
 
-const leftChannel = fs.readFileSync(leftChannelName);
-const rightChannel = fs.readFileSync(rightChannelName);
+const leftChannelRaw = fs.readFileSync(leftChannelName);
+const rightChannelRaw = fs.readFileSync(rightChannelName);
 
+let zeroBytes = Buffer.alloc(Math.ceil(leftChannelRaw.length / 8) * 8 - leftChannelRaw.length, 0x00);
 
-const interleaveBlockSize = 8;
-const chunkAmountPerFile = Math.ceil((leftChannel.length - 112) / interleaveBlockSize);
+const leftChannel = Buffer.concat([leftChannelRaw, zeroBytes], Math.ceil(leftChannelRaw.length / 8) * 8);
+const rightChannel = Buffer.concat([rightChannelRaw, zeroBytes], Math.ceil(rightChannelRaw.length / 8) * 8);
+
 let loopStartSample = 0;
 let loopEndSample = 0;
 let loopStartNibble;
@@ -51,10 +47,10 @@ sampleRate = leftChannel.readInt32LE(8);
 
 loopLength = loopEndSample - loopStartSample;
 
-let ktssFile = Buffer.alloc(leftChannel.length + rightChannel.length + 64);
+let ktssFile = Buffer.alloc(Math.ceil((leftChannel.length + rightChannel.length + 64) / 8) * 8);
 
 ktssFile.write("KTSS", 0);
-ktssFile.writeInt32LE(leftChannel.length + rightChannel.length + 64, 4);
+ktssFile.writeInt32LE(ktssFile.length, 4);
 ktssFile.write('02000303E000000001020000', 0x20, 'hex')
 ktssFile.writeInt32LE(sampleRate, 0x2c);
 ktssFile.writeInt32LE(sampleCount, 0x30);
@@ -63,12 +59,18 @@ ktssFile.writeInt32LE(loopLength, 0x38);
 leftChannel.copy(ktssFile, 0x40, 0, 0x60);
 rightChannel.copy(ktssFile, 0xa0, 0, 0x60);
 
-for (let i = 0; i < chunkAmountPerFile; i++) {
-    let currentAudioPosition = 112 + i * interleaveBlockSize;
-    let currentKTSSPosition = 256 + i * interleaveBlockSize * 2;
-    leftChannel.copy(ktssFile, currentKTSSPosition, currentAudioPosition, currentAudioPosition + interleaveBlockSize);
-    rightChannel.copy(ktssFile, currentKTSSPosition + interleaveBlockSize, currentAudioPosition, currentAudioPosition + interleaveBlockSize);
+for (let i = 0; i < leftChannel.length - 96; i += 8) {
+    let currentAudioPosition = 96 + i;
+    let currentKTSSPosition = 256 + i * 2;
+    leftChannel.copy(ktssFile, currentKTSSPosition, currentAudioPosition, currentAudioPosition + 8);
+
 }
+for (let i = 0; i < rightChannel.length - 96; i += 8) {
+    let currentAudioPosition = 96 + i;
+    let currentKTSSPosition = 256 + 8 + i * 2;
+    rightChannel.copy(ktssFile, currentKTSSPosition, currentAudioPosition, currentAudioPosition + 8);
+}
+
 const fileName = path.join(path.parse(leftChannelName).dir, path.parse(leftChannelName).name);
 console.log(fileName);
 
